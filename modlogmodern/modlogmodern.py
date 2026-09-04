@@ -54,7 +54,7 @@ class ModLogModern(commands.Cog):
     """A drop-in renderer for Red's core ModLog cases."""
 
     __author__ = "neuropolimer"
-    __version__ = "0.3.0"
+    __version__ = "0.3.1"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -139,6 +139,19 @@ class ModLogModern(commands.Cog):
             return None
         channel = guild.get_channel(channel_id)
         return channel if isinstance(channel, discord.TextChannel) else None
+
+    async def _effective_takeover(self, guild: discord.Guild) -> bool:
+        """Detect both current and pre-0.3.0 takeover state."""
+        settings = await self.config.guild(guild).all()
+        if settings["takeover_active"]:
+            return True
+        if not settings["enabled"] or not settings["channel_id"]:
+            return False
+        try:
+            core_channel = await modlog.get_modlog_channel(guild)
+        except RuntimeError:
+            core_channel = None
+        return core_channel is None
 
     async def _send_case(self, case) -> None:
         guild = case.guild
@@ -250,14 +263,22 @@ class ModLogModern(commands.Cog):
 
         # Save the state only on the first takeover. Re-running takeover to move
         # the modern channel must not overwrite the original Red/Warn settings.
+        effective_takeover = await self._effective_takeover(ctx.guild)
         if not settings["takeover_active"]:
             try:
                 previous_core_channel = await modlog.get_modlog_channel(ctx.guild)
             except RuntimeError:
                 previous_core_channel = None
-            await guild_config.previous_core_channel_id.set(
-                previous_core_channel.id if previous_core_channel else None
+
+            # Pre-0.3.0 installations did not persist takeover state. If core
+            # ModLog is already disabled while modern output is enabled, the
+            # best safe migration target is the current modern log channel.
+            previous_core_id = (
+                previous_core_channel.id
+                if previous_core_channel is not None
+                else settings["channel_id"] if effective_takeover else None
             )
+            await guild_config.previous_core_channel_id.set(previous_core_id)
 
         await guild_config.channel_id.set(channel.id)
         await guild_config.enabled.set(True)
@@ -274,7 +295,7 @@ class ModLogModern(commands.Cog):
         if warnings_cog is not None and hasattr(warnings_cog, "config"):
             try:
                 warnings_config = warnings_cog.config.guild(ctx.guild)
-                if not settings["takeover_active"]:
+                if not effective_takeover:
                     previous_toggle = await warnings_config.toggle_channel()
                     await guild_config.previous_warnings_toggle.set(previous_toggle)
                 await warnings_config.toggle_channel.set(False)
@@ -309,8 +330,7 @@ class ModLogModern(commands.Cog):
     @modlogmodern.command(name="off")
     async def modlogmodern_off(self, ctx: commands.Context) -> None:
         """Disable ModLogModern output without changing Red core ModLog."""
-        settings = await self.config.guild(ctx.guild).all()
-        if settings["takeover_active"]:
+        if await self._effective_takeover(ctx.guild):
             await ctx.send(
                 "Сейчас активен takeover: стандартный Red ModLog отключён. "
                 "Чтобы не оставить сервер вообще без видимых логов, используй "
@@ -327,14 +347,18 @@ class ModLogModern(commands.Cog):
         """Return visible logging to Red and restore the pre-takeover Warnings state."""
         guild_config = self.config.guild(ctx.guild)
         settings = await guild_config.all()
+        effective_takeover = await self._effective_takeover(ctx.guild)
 
         if channel is None:
-            if settings["takeover_active"]:
+            if effective_takeover:
                 previous_id = settings["previous_core_channel_id"]
                 previous_channel = ctx.guild.get_channel(previous_id) if previous_id else None
+                modern_channel = ctx.guild.get_channel(settings["channel_id"])
                 channel = (
                     previous_channel
                     if isinstance(previous_channel, discord.TextChannel)
+                    else modern_channel
+                    if isinstance(modern_channel, discord.TextChannel)
                     else None
                 )
             else:
@@ -349,7 +373,7 @@ class ModLogModern(commands.Cog):
         previous_toggle = settings["previous_warnings_toggle"]
         warnings_cog = self.bot.get_cog("Warnings")
         if (
-            settings["takeover_active"]
+            effective_takeover
             and previous_toggle is not None
             and warnings_cog is not None
             and hasattr(warnings_cog, "config")
@@ -393,11 +417,18 @@ class ModLogModern(commands.Cog):
         )
         core_value = core_channel.mention if core_channel else "отключён"
 
+        effective_takeover = await self._effective_takeover(ctx.guild)
+        legacy_suffix = (
+            " (мигрированное старое состояние)"
+            if effective_takeover and not settings["takeover_active"]
+            else ""
+        )
+
         await ctx.send(
             "\n".join(
                 (
                     f"ModLogModern: {'включён' if settings['enabled'] else 'выключен'}",
-                    f"Takeover: {'активен' if settings['takeover_active'] else 'нет'}",
+                    f"Takeover: {'активен' if effective_takeover else 'нет'}{legacy_suffix}",
                     f"Канал ModLogModern: {modern_value}",
                     f"Стандартный Red ModLog: {core_value}",
                 )
