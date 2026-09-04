@@ -2,7 +2,7 @@
   "author": [
     "neuropolimer"
   ],
-  "description": "Кастомный вывод ModLog case'ов для Red-DiscordBot с минимальной модификацией warning case.",
-  "install_msg": "Репозиторий modlog-modern добавлен. Установи cog `modlogmodern`, затем используй `[p]modlogmodern takeover #канал`.",
-  "short": "Замена видимого вывода Red ModLog без замены его case-базы."
+  "description": "Более аккуратный вывод штатного Red ModLog с отдельным ID предупреждения.",
+  "install_msg": "Установи `modlogmodern`, затем укажи канал через `[p]modlogmodern takeover #канал`.",
+  "short": "Альтернативный вывод Red ModLog."
 }
