@@ -13,11 +13,48 @@ log = logging.getLogger("red.neuropolimer.modlogmodern")
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 
 
+async def _modern_case_message_content(case, embed: bool = True):
+    """Render Red ModLog cases with cleaned warning metadata everywhere.
+
+    Stored case data is never changed. For warning cases we temporarily hide
+    Red Warnings' trailing unwarn instruction while rendering, then expose the
+    warning ID as its own field/line.
+    """
+    original = getattr(modlog.Case, "_modlogmodern_original_message_content", None)
+    if original is None:
+        original = modlog.Case.message_content
+
+    if getattr(case, "action_type", None) != "warning":
+        return await original(case, embed)
+
+    clean_reason, warning_id = ModLogModern._clean_warning_reason(case)
+    if not warning_id or clean_reason == getattr(case, "reason", None):
+        return await original(case, embed)
+
+    original_reason = case.reason
+    case.reason = clean_reason
+    try:
+        rendered = await original(case, embed)
+    finally:
+        case.reason = original_reason
+
+    if embed:
+        rendered.insert_field_at(
+            0,
+            name="ID предупреждения",
+            value=warning_id,
+            inline=False,
+        )
+        return rendered
+
+    return f"{rendered}\n**ID предупреждения:** {warning_id}"
+
+
 class ModLogModern(commands.Cog):
     """A drop-in renderer for Red's core ModLog cases."""
 
     __author__ = "neuropolimer"
-    __version__ = "0.1.0"
+    __version__ = "0.2.0"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -27,6 +64,24 @@ class ModLogModern(commands.Cog):
             enabled=True,
             messages={},
         )
+
+
+    async def cog_load(self) -> None:
+        # Patch the shared Case renderer so case/casesfor/listcases/history use
+        # the same cleaned warning output as the live ModLogModern channel.
+        if not hasattr(modlog.Case, "_modlogmodern_original_message_content"):
+            setattr(
+                modlog.Case,
+                "_modlogmodern_original_message_content",
+                modlog.Case.message_content,
+            )
+        modlog.Case.message_content = _modern_case_message_content
+
+    def cog_unload(self) -> None:
+        original = getattr(modlog.Case, "_modlogmodern_original_message_content", None)
+        if original is not None and modlog.Case.message_content is _modern_case_message_content:
+            modlog.Case.message_content = original
+            delattr(modlog.Case, "_modlogmodern_original_message_content")
 
     @staticmethod
     def _case_user_id(case) -> Optional[int]:
@@ -72,34 +127,8 @@ class ModLogModern(commands.Cog):
         return clean_reason.rstrip(), warning_id
 
     async def _render_case(self, case, use_embed: bool):
-        """Use Red's native Case renderer and patch only warning presentation."""
-        rendered = await case.message_content(use_embed)
-
-        if getattr(case, "action_type", None) != "warning":
-            return rendered
-
-        clean_reason, warning_id = self._clean_warning_reason(case)
-        if not warning_id or clean_reason == getattr(case, "reason", None):
-            return rendered
-
-        original_reason = case.reason
-
-        if use_embed:
-            if rendered.description:
-                rendered.description = rendered.description.replace(
-                    original_reason, clean_reason or "", 1
-                )
-            rendered.insert_field_at(
-                0,
-                name="ID предупреждения",
-                value=warning_id,
-                inline=False,
-            )
-            return rendered
-
-        rendered = rendered.replace(original_reason, clean_reason or "", 1)
-        rendered = f"{rendered}\n**ID предупреждения:** {warning_id}"
-        return rendered
+        """Use the globally patched Red Case renderer."""
+        return await case.message_content(use_embed)
 
     async def _configured_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
         channel_id = await self.config.guild(guild).channel_id()
