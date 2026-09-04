@@ -54,7 +54,7 @@ class ModLogModern(commands.Cog):
     """A drop-in renderer for Red's core ModLog cases."""
 
     __author__ = "neuropolimer"
-    __version__ = "0.3.1"
+    __version__ = "0.3.2"
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -295,7 +295,7 @@ class ModLogModern(commands.Cog):
         if warnings_cog is not None and hasattr(warnings_cog, "config"):
             try:
                 warnings_config = warnings_cog.config.guild(ctx.guild)
-                if not effective_takeover:
+                if settings["previous_warnings_toggle"] is None:
                     previous_toggle = await warnings_config.toggle_channel()
                     await guild_config.previous_warnings_toggle.set(previous_toggle)
                 await warnings_config.toggle_channel.set(False)
